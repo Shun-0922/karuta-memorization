@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<title>競技かるた配置覚えゲーム</title>
+<style>
+  body {
+    font-family: sans-serif;
+    text-align: center;
+    height: 100vh;
+    /* グラデーション背景 */
+    background: #c0c0c0
+  }
+  h1 { margin-top: 50px; }
+
+  #game-area {
+    position: relative;
+    width: 1300px;
+    height: 377px;
+    margin: 50px auto;
+    background: #cddead;
+    border-radius: 10px;
+  }
+
+  #game-area2 {
+    position: relative;
+    width: 1300px;
+    height: 377px;
+    margin: 55px auto;
+    background: #cddead;
+    border-radius: 10px;
+  }
+
+  .card {
+    position: absolute;
+    cursor: pointer;
+    perspective: 1000px;
+  }
+  .card-inner {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    text-align: center;
+    transition: transform 0.6s;
+    transform-style: preserve-3d;
+  }
+  .card.flipped .card-inner {
+    transform: rotateY(180deg);
+  }
+  .card-front, .card-back{
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    backface-visibility: hidden;
+    border: 2px solid #333;
+    border-radius: 8px;
+    box-sizing: border-box;
+  }
+  .card-front {
+    transform: rotateY(180deg) rotate(180deg);
+    background-size: cover;
+    background-position: center;
+  }
+  .card-back { background-color: #004d00; }
+
+  .card-overlay { 
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    backface-visibility: hidden;
+    border: 0px;
+    border-radius: 6px;
+    background-color: transparent; 
+  }
+
+  @keyframes flash {
+    0%   { opacity: 1; }
+    50%  { opacity: 0; }
+    100% { opacity: 1; }
+  }
+
+  .flash {
+    animation: flash 0.8s ease;
+  }
+
+  #controls {
+    margin-top: 50px;
+  }
+
+  #status-area {
+    margin: 10px;
+  }
+  #status-area span { margin: 0 10px; font-weight: bold; }
+</style>
+</head>
+<body>
+
+<div id="controls">
+  枚数: <input type="number" id="num-cards" value="5" min="2" max="48" step="1" />
+  暗記時間(秒): <input type="number" id="show-time" value="5" min="1" max="900" />
+  <button onclick="startGame()">スタート</button>
+</div>
+
+<div id="status-area">
+  時間: <span id="remaining-time">0</span>秒
+  状態: <span id="game-state">待機中</span>
+  不正解: <span id="mistake-count">0</span>
+</div>
+
+<div id="game-area"></div>
+
+<div id="game-area2"></div>
+
+<script>
+const imageFolder = "torifuda/";
+const imageFiles = Array.from({length: 100}, (_, i) => `f1s1_${String(i+1).padStart(3,'0')}.jpg`);
+
+// デザイン関連定数
+const Design = {
+  CARD_WIDTH: 78,
+  CARD_HEIGHT: 111,
+  AREA_WIDTH: 1300,
+  AREA_HEIGHT: 377,
+  ROW_HEIGHT: 133,
+  MAX_GROUP_CARDS: 8,
+  NUM_GROUPS: 6
+};
+
+let selectedCards = [];
+let remainingTime = 0;
+let timerInterval = null;
+let mistakeCount = 0;
+let mistakenThisCard = false;
+let currentTarget = null;
+
+function startGame() {
+  const numCards = parseInt(document.getElementById("num-cards").value);
+  const showTime = parseInt(document.getElementById("show-time").value) * 1000;
+
+  startMemorization(parseInt(document.getElementById("show-time").value));
+  document.getElementById("mistake-count").textContent = 0;
+
+  // シャッフルして選ぶ
+  const shuffled = [...imageFiles].sort(() => Math.random()-0.5);
+  selectedCards = shuffled.slice(0, numCards);
+
+  const gameArea = document.getElementById("game-area");
+  gameArea.innerHTML = "";
+
+  // グループごとの配置管理
+  const num_cards_for_group = new Array(Design.NUM_GROUPS).fill(0);
+
+  selectedCards.forEach((file, idx) => {
+    const card = document.createElement("div");
+    card.className = "card";
+    card.style.width = Design.CARD_WIDTH + "px";
+    card.style.height = Design.CARD_HEIGHT + "px";
+    card.innerHTML = `
+      <div class="card-inner">
+        <div class="card-front" style="background-image:url('${imageFolder}${file}')"></div>
+        <div class="card-overlay"></div>
+        <div class="card-back"></div>
+      </div>`;
+
+    // グループ選択（各グループ最大8枚）
+    let group = -1;
+    while(true) {
+      group = Math.floor(Math.random() * Design.NUM_GROUPS);
+      if(num_cards_for_group[group] < Design.MAX_GROUP_CARDS) break;
+    }
+
+    card.style.right = (group%2 === 0 ? num_cards_for_group[group]*Design.CARD_WIDTH + "px"
+                                     : Design.AREA_WIDTH - (num_cards_for_group[group]+1)*Design.CARD_WIDTH + "px");
+    card.style.top = (Math.floor(group/2)*Design.ROW_HEIGHT + "px");
+    num_cards_for_group[group]++;
+    gameArea.appendChild(card);
+  });
+
+  // 表示時間後に裏返す
+  document.querySelectorAll('.card').forEach(c => c.classList.add('flipped'));
+  document.getElementById("game-state").textContent = "暗記中";
+}
+
+function enableClick() {
+  const cards = document.querySelectorAll('.card');
+  mistakeCount = 0;
+  pickTarget();
+  cards.forEach(card => {
+    card.addEventListener('click', () => {
+      const front = card.querySelector(".card-front");
+      if(front.style.backgroundImage.includes(currentTarget)) {
+        if (mistakenThisCard) {
+          /* add red filter on card */
+          const overlay = card.querySelector(".card-overlay");
+          overlay.style.backgroundColor = "rgba(255, 0, 0, 0.3)";
+          front.appendChild(overlay);
+        }
+        card.classList.add("flipped");
+        mistakenThisCard = false;
+        pickTarget();
+      }
+      else {
+        mistakeCount++;
+        mistakenThisCard = true;
+        document.getElementById("mistake-count").textContent = mistakeCount;
+        card.classList.add("flash");
+        card.addEventListener("animationend", () => {
+          card.classList.remove("flash");
+        }, { once: true });
+      }
+    });
+  });
+}
+
+function pickTarget() {
+  if(selectedCards.length === 0) {
+    /* freeze time */
+    currentTarget = null;
+    document.getElementById("game-state").textContent = "終了";
+    if(timerInterval) clearInterval(timerInterval);
+    return;
+  }
+  const idx = Math.floor(Math.random() * selectedCards.length);
+  currentTarget = selectedCards[idx];
+  selectedCards.splice(idx, 1);
+  console.log(selectedCards)
+  const card = document.createElement("div");
+  card.className = "card";
+  card.style.width = Design.CARD_WIDTH + "px";
+  card.style.height = Design.CARD_HEIGHT + "px";
+  card.innerHTML = `
+      <div class="card-inner">
+        <div class="card-front" style="background-image:url('${imageFolder}${currentTarget}')"></div>
+        <div class="card-back"></div>
+      </div>`;
+  card.classList.add("flipped");
+  card.style.transform = "rotate(180deg)";
+  card.style.right = (4*Design.CARD_WIDTH + "px");
+  card.style.top = (-1.2*Design.CARD_HEIGHT + "px");
+  const gameArea = document.getElementById("game-area");
+  gameArea.appendChild(card);
+}
+
+function startMemorization(seconds) {
+  remainingTime = seconds;
+  document.getElementById("remaining-time").textContent = remainingTime;
+  if(timerInterval) clearInterval(timerInterval);
+  timerInterval = setInterval(() => {
+    remainingTime--;
+    document.getElementById("remaining-time").textContent = remainingTime;
+    if(remainingTime <= 0) {
+      clearInterval(timerInterval);
+      document.getElementById("game-state").textContent = "プレイ中";
+      document.querySelectorAll('.card').forEach(c => c.classList.remove('flipped'));
+      enableClick();
+      startRecall();
+    }
+  }, 1000);
+}
+
+  function startRecall() {
+    remainingTime = 0;
+    document.getElementById("remaining-time").textContent = remainingTime;
+    if(timerInterval) clearInterval(timerInterval);
+    timerInterval = setInterval(() => {
+      remainingTime++; 
+      document.getElementById("remaining-time").textContent = remainingTime;
+    }, 1000);
+}
+
+</script>
+</body>
+</html>
